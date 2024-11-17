@@ -30,8 +30,11 @@
  * @see http://designpatterns.sourceforge.net/patterns/Observer.html
  */
 
-#include <SDL2/SDL.h>
+
+
 #include <iostream>
+#include <memory>
+#include <SDL2/SDL.h>
 
 /**
  * @class Observer
@@ -39,19 +42,12 @@
  *
  * Defines the interface for objects that need to be notified when the state of the subject changes.
  */
-class Observer 
+class Observer : public std::enable_shared_from_this<Observer> 
 {
     friend class Subject;
 
 public:
-    /**
-     * @brief Constructor initializes the next pointer to nullptr.
-     */
-    Observer() : next_(nullptr) {}
-
-    /**
-     * @brief Destructor.
-     */
+    Observer() = default;
     virtual ~Observer() = default;
 
     /**
@@ -62,7 +58,7 @@ public:
 
 private:
     /**< Pointer to the next observer in the chain */
-    Observer* next_;
+    std::weak_ptr<Observer> next_;
 };
 
 /**
@@ -74,59 +70,57 @@ private:
 class Subject 
 {
 private:
-    Observer* head_; /**< Head of the linked list of observers */
-    int state_;      /**< Current state value of the subject */
+    std::weak_ptr<Observer> head_; /**< Head of the linked list of observers */
+    int state_; /**< Current state value of the subject */
 
 public:
-    /**
-     * @brief Constructor initializes the subject with no observers and a state of 0.
-     */
-    Subject() : head_(nullptr), state_(0) {}
+    Subject() : state_(0) 
+    {
+        std::cout << "Subject constructor called" << std::endl;
+    }
+
+    ~Subject() 
+    {
+        std::cout << "Subject destructor called" << std::endl;
+    }
 
     /**
      * @brief Adds a new observer to the subject.
-     * @param observer Pointer to the observer to be added.
+     * @param observer Shared pointer to the observer to be added.
      */
-    void addObserver(Observer* observer) 
+    void addObserver(const std::shared_ptr<Observer>& observer) 
     {
-        observer->next_ = head_;
+        if (auto currentHead = head_.lock()) 
+        {
+            observer->next_ = currentHead;
+        }
         head_ = observer;
     }
 
     /**
      * @brief Removes an observer from the subject.
-     * @param observer Pointer to the observer to be removed.
+     * @param observer Shared pointer to the observer to be removed.
      */
-    void removeObserver(Observer* observer)
+    void removeObserver(const std::shared_ptr<Observer>& observer) 
     {
-        if (head_ == observer)
+        auto currentHead = head_.lock();
+        if (!currentHead) return;
+
+        if (currentHead == observer) 
         {
-            head_ = observer->next_;
-            observer->next_ = nullptr;
-            // code to fix a memory leak, 
-            // the implementation above assumes 
-            // that we have a garbage collector !!!
-            // delete observer->next_
+            head_ = currentHead->next_;
             return;
         }
 
-        Observer* current = head_;
-
-        while (current != nullptr) 
+        auto current = currentHead;
+        while (current) 
         {
-            if (current->next_ == observer)
+            if (auto next = current->next_.lock(); next == observer) 
             {
-                current->next_ = observer->next_;
-                observer->next_ = nullptr;
-                
-                // code to fix a memory leak, 
-                // the implementation above assumes 
-                // that we have a garbage collector !!!
-                // delete observer->next_
-            
+                current->next_ = next->next_;
                 return;
             }
-            current = current->next_;
+            current = current->next_.lock();
         }
     }
 
@@ -141,22 +135,15 @@ public:
     }
 
     /**
-     * @brief Retrieves the current state of the subject.
-     * @return The current state value.
-     */
-    int getState() const { return state_; }
-
-    /**
      * @brief Notifies all observers of the current state.
      */
     void notifyObservers() 
     {
-        Observer* current = head_;
-
+        auto current = head_.lock();
         while (current) 
         {
             current->onNotify(state_);
-            current = current->next_;
+            current = current->next_.lock();
         }
     }
 };
@@ -168,6 +155,16 @@ public:
 class HealthUI : public Observer 
 {
 public:
+    HealthUI() 
+    {
+        std::cout << "Health UI constructor called" << std::endl;
+    }
+
+    ~HealthUI() 
+    {
+        std::cout << "Health UI destructor called" << std::endl;
+    }
+
     void onNotify(int value) override 
     {
         std::cout << "[Health UI] Player health updated to: " << value << std::endl;
@@ -181,10 +178,16 @@ public:
 class ScoreUI : public Observer 
 {
 public:
-    /**
-     * @brief Handles notifications with the new state value.
-     * @param value The new state value (player health).
-     */
+    ScoreUI() 
+    {
+        std::cout << "Score UI constructor called" << std::endl;
+    }
+
+    ~ScoreUI() 
+    {
+        std::cout << "Score UI destructor called" << std::endl;
+    }
+
     void onNotify(int value) override 
     {
         std::cout << "[Score UI] Player score updated to: " << value * 10 << " points" << std::endl;
@@ -198,10 +201,6 @@ public:
 class EventLogger : public Observer 
 {
 public:
-    /**
-     * @brief Handles notifications with the new state value.
-     * @param value The new state value (event data).
-     */
     void onNotify(int value) override 
     {
         std::cout << "[Logger] Event logged with state: " << value << std::endl;
@@ -242,15 +241,15 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Create Subject and Observers
-    Subject subject;
-    HealthUI healthUI;
-    ScoreUI scoreUI;
-    EventLogger logger;
+    auto subject = std::make_shared<Subject>();
 
-    subject.addObserver(&healthUI);
-    subject.addObserver(&scoreUI);
-    subject.addObserver(&logger);
+    auto healthUI = std::make_shared<HealthUI>();
+    auto scoreUI = std::make_shared<ScoreUI>();
+    auto logger = std::make_shared<EventLogger>();
+
+    subject->addObserver(healthUI);
+    subject->addObserver(scoreUI);
+    subject->addObserver(logger);
 
     bool running = true;
     SDL_Event event;
@@ -271,14 +270,14 @@ int main(int argc, char* argv[])
                 switch (event.key.keysym.sym) 
                 {
                     case SDLK_SPACE:
-                        subject.setState(++counter);
+                        subject->setState(++counter);
                         break;
                     case SDLK_r:
                         counter = 0;
-                        subject.setState(counter);
+                        subject->setState(counter);
                         break;
                     case SDLK_h:
-                        subject.setState(--counter);
+                        subject->setState(--counter);
                         break;
                     default:
                         break;
