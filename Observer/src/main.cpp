@@ -103,6 +103,10 @@ public:
         {
             head_ = observer->next_;
             observer->next_ = nullptr;
+            // code to fix a memory leak, 
+            // the implementation above assumes 
+            // that we have a garbage collector !!!
+            // delete observer->next_
             return;
         }
 
@@ -110,10 +114,16 @@ public:
 
         while (current != nullptr) 
         {
-            if (current->next_ == observer) 
+            if (current->next_ == observer)
             {
                 current->next_ = observer->next_;
                 observer->next_ = nullptr;
+                
+                // code to fix a memory leak, 
+                // the implementation above assumes 
+                // that we have a garbage collector !!!
+                // delete observer->next_
+            
                 return;
             }
             current = current->next_;
